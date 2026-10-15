@@ -165,7 +165,13 @@ impl Overscroll {
                 let moving = self
                     .moved_at
                     .is_some_and(|at| now.saturating_duration_since(at) < STILL);
-                let velocity = if moving { self.velocity } else { 0. };
+                // Only a stretched edge carries finger velocity; ordinary
+                // scrolling leaves platform momentum in charge.
+                let velocity = if moving && self.offset() != 0. {
+                    self.velocity
+                } else {
+                    0.
+                };
                 self.physics.let_go(velocity * CARRY);
                 thrown = true;
                 self.spent = self.offset() != 0.;
@@ -230,6 +236,41 @@ mod tests {
             let used = dy.max(-*room);
             *room += used;
             used
+        }
+    }
+
+    #[test]
+    fn a_quick_second_swipe_in_the_middle_scrolls_without_stretching() {
+        for delta in [-20., 20.] {
+            for end in [TouchPhase::Ended, TouchPhase::Cancelled] {
+                let start = Instant::now();
+                let mut overscroll = Overscroll::default();
+                let mut room = 500.;
+                let mut expected = room;
+                for (n, (dy, phase)) in [
+                    (delta, TouchPhase::Started),
+                    (delta, TouchPhase::Moved),
+                    (0., end),
+                    (delta, TouchPhase::Moved), // Platform momentum still scrolls.
+                    (0., TouchPhase::Started),  // Regrab before a spring could settle.
+                    (delta, TouchPhase::Moved),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let at = start + Duration::from_millis(16 * n as u64);
+                    overscroll.packet(dy, phase, 400., at, text(&mut room));
+                    expected += dy;
+                    assert_eq!(room, expected, "every delta scrolls the text");
+                    assert_eq!(overscroll.offset(), 0.);
+                    overscroll.step(at + Duration::from_millis(8));
+                    assert_eq!(
+                        overscroll.offset(),
+                        0.,
+                        "no spring displacement between packets"
+                    );
+                }
+            }
         }
     }
 
